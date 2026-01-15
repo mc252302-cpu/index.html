@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>High Leverage Trading Simulator</title>
+    <script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+    <style>
+        :root {
+            --bg-color: #121212;
+            --panel-bg: #1e1e1e;
+            --text-main: #e0e0e0;
+            --text-sub: #9ca3af;
+            --up-color: #26a69a;
+            --down-color: #ef5350;
+            --accent-color: #fdd835;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-main);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+            user-select: none;
+        }
+
+        /* 헤더 스타일 */
+        header {
+            background-color: var(--panel-bg);
+            padding: 10px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #333;
+            height: 60px;
+        }
+
+        .dashboard-item { display: flex; flex-direction: column; min-width: 100px; }
+        .label { font-size: 11px; color: var(--text-sub); margin-bottom: 4px; }
+        .value { font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums; }
+        .pnl.positive { color: var(--up-color); }
+        .pnl.negative { color: var(--down-color); }
+        
+        .roe { font-size: 12px; margin-left: 5px; font-weight: normal; } /* 수익률 표시 */
+
+        /* 차트 영역 */
+        #chart-wrapper {
+            flex-grow: 1;
+            position: relative;
+            width: 100%;
+        }
+        #chart-container { width: 100%; height: 100%; }
+
+        /* 가격 오버레이 */
+        .price-overlay {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            z-index: 10;
+            pointer-events: none;
+        }
+        .current-price-display {
+            font-size: 36px;
+            font-weight: 800;
+            text-shadow: 0 2px 5px rgba(0,0,0,0.7);
+        }
+
+        /* 하단 컨트롤 패널 */
+        .controls {
+            background-color: var(--panel-bg);
+            padding: 15px 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            border-top: 1px solid #333;
+            height: 140px; /* 높이 증가 */
+        }
+
+        /* 레버리지 슬라이더 영역 */
+        .leverage-control {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #2a2a2a;
+            padding: 10px;
+            border-radius: 8px;
+        }
+        .leverage-value {
+            color: var(--accent-color);
+            font-weight: bold;
+            font-size: 18px;
+            min-width: 60px;
+            text-align: right;
+        }
+        input[type=range] {
+            width: 70%;
+            cursor: pointer;
+        }
+
+        /* 버튼 영역 */
+        .buttons {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            width: 100%;
+        }
+
+        button {
+            border: none;
+            border-radius: 6px;
+            flex: 1;
+            height: 50px;
+            font-size: 16px;
+            font-weight: 800;
+            color: white;
+            cursor: pointer;
+            transition: transform 0.1s, opacity 0.2s;
+            text-transform: uppercase;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        button:active { transform: scale(0.98); }
+        button:disabled { opacity: 0.3; cursor: not-allowed; }
+
+        .btn-long { background: linear-gradient(135deg, #26a69a 0%, #00897b 100%); }
+        .btn-short { background: linear-gradient(135deg, #ef5350 0%, #c62828 100%); }
+        .btn-close { background-color: #546e7a; max-width: 120px; }
+
+        /* 포지션 정보 뱃지 */
+        #pos-info {
+            display: none; 
+            font-size: 12px; 
+            background: rgba(255,255,255,0.1); 
+            padding: 2px 6px; 
+            border-radius: 4px;
+            margin-left: 5px;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div class="dashboard-item">
+            <span class="label">내 자산 (Equity)</span>
+            <span class="value" id="balance-display">$10,000.00</span>
+        </div>
+        <div class="dashboard-item" style="align-items: center;">
+            <span class="label">포지션</span>
+            <div style="display:flex; align-items:center;">
+                <span class="value" id="position-type">대기 중</span>
+                <span id="pos-info">10x</span>
+            </div>
+        </div>
+        <div class="dashboard-item" style="text-align: right;">
+            <span class="label">미실현 손익 (PnL)</span>
+            <div style="display: flex; flex-direction: column; align-items: flex-end;">
+                <span class="value pnl" id="pnl-display">$0.00</span>
+                <span class="roe pnl" id="roe-display">0.00%</span>
+            </div>
+        </div>
+    </header>
+
+    <div id="chart-wrapper">
+        <div class="price-overlay">
+            <div class="label" style="font-size:14px; margin-bottom:5px; font-weight:bold;">BTC/USDT Perpetual</div>
+            <div id="live-price" class="current-price-display">Loading...</div>
+        </div>
+        <div id="chart-container"></div>
+    </div>
+
+    <div class="controls">
+        <div class="leverage-control">
+            <span class="label" style="font-size:14px; color:#fff;">배율 설정 (Leverage)</span>
+            <input type="range" id="leverage-slider" min="1" max="100" value="10" step="1" oninput="updateLeverageDisplay(this.value)">
+            <span id="leverage-text" class="leverage-value">10x</span>
+        </div>
+
+        <div class="buttons">
+            <button class="btn-long" id="btn-long" onclick="trade('long')">Long 🚀</button>
+            <button class="btn-close" id="btn-close" onclick="closePosition()" disabled>Close</button>
+            <button class="btn-short" id="btn-short" onclick="trade('short')">Short 📉</button>
+        </div>
+    </div>
+
+    <script>
+        // --- 1. 차트 라이브러리 로드 체크 ---
+        window.onload = function() {
+            if (typeof LightweightCharts === 'undefined') {
+                alert("차트 로딩 실패! 새로고침 해주세요.");
+                return;
+            }
+            initGame();
+        };
+
+        // --- 2. 게임 변수 ---
+        let balance = 10000;
+        let currentPrice = 60000; // 비트코인 가격대
+        let position = null;      // 'long' | 'short' | null
+        let entryPrice = 0;
+        let contractQty = 0;      // 보유 코인 개수
+        let currentLeverage = 10; // 기본 레버리지
+        let entryLeverage = 10;   // 진입 당시 레버리지
+
+        let candleData = [];
+        let markers = [];
+        let chart, series;
+
+        // UI 엘리먼트
+        const elBalance = document.getElementById('balance-display');
+        const elPnL = document.getElementById('pnl-display');
+        const elRoe = document.getElementById('roe-display');
+        const elLivePrice = document.getElementById('live-price');
+        const elPosType = document.getElementById('position-type');
+        const elPosInfo = document.getElementById('pos-info');
+        const elLevText = document.getElementById('leverage-text');
+        const elLevSlider = document.getElementById('leverage-slider');
+        
+        const btnLong = document.getElementById('btn-long');
+        const btnShort = document.getElementById('btn-short');
+        const btnClose = document.getElementById('btn-close');
+
+        // --- 3. 게임 초기화 ---
+        function initGame() {
+            const container = document.getElementById('chart-container');
+            chart = LightweightCharts.createChart(container, {
+                layout: { background: { color: '#121212' }, textColor: '#d1d4dc' },
+                grid: { vertLines: { color: '#2B2B43' }, horzLines: { color: '#2B2B43' } },
+                timeScale: { timeVisible: true, secondsVisible: true, borderColor: '#485c7b' },
+                crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+            });
+
+            series = chart.addCandlestickSeries({
+                upColor: '#26a69a', downColor: '#ef5350',
+                borderVisible: false, wickUpColor: '#26a69a', wickDownColor: '#ef5350',
+            });
+
+            // 반응형 처리
+            new ResizeObserver(entries => {
+                if(entries.length) chart.applyOptions({ width: entries[0].contentRect.width, height: entries[0].contentRect.height });
+            }).observe(container);
+
+            generateInitialData();
+            startGameLoop();
+        }
+
+        // --- 4. 데이터 생성 및 루프 ---
+        function generateInitialData() {
+            let time = Math.floor(Date.now() / 1000) - (200 * 60);
+            let price = currentPrice;
+            for (let i = 0; i < 200; i++) {
+                let change = (Math.random() - 0.5) * 200; // 변동폭
+                let open = price;
+                let close = price + change;
+                let high = Math.max(open, close) + Math.random() * 50;
+                let low = Math.min(open, close) - Math.random() * 50;
+                candleData.push({ time: time + (i * 60), open, high, low, close });
+                price = close;
+            }
+            series.setData(candleData);
+            currentPrice = price;
+        }
+
+        function startGameLoop() {
+            let lastCandle = candleData[candleData.length - 1];
+            let tickCount = 0;
+
+            setInterval(() => {
+                // 가격 변동 (랜덤 워크 + 약간의 추세)
+                const volatility = 30; // 변동성 증가
+                const noise = (Math.random() - 0.5) * volatility;
+                currentPrice += noise;
+
+                // 캔들 업데이트
+                lastCandle.close = currentPrice;
+                lastCandle.high = Math.max(lastCandle.high, currentPrice);
+                lastCandle.low = Math.min(lastCandle.low, currentPrice);
+                
+                series.update(lastCandle);
+                updateUI(lastCandle.open);
+                checkLiquidation(); // 청산 체크
+
+                tickCount++;
+                if (tickCount > 10) { // 새 캔들 생성 주기 (빠르게)
+                    tickCount = 0;
+                    const nextTime = lastCandle.time + 60;
+                    lastCandle = { time: nextTime, open: currentPrice, high: currentPrice, low: currentPrice, close: currentPrice };
+                }
+            }, 100);
+        }
+
+        // --- 5. UI 및 계산 로직 ---
+        function updateLeverageDisplay(val) {
+            currentLeverage = parseInt(val);
+            elLevText.innerText = currentLeverage + 'x';
+            if(position !== null) {
+                // 포지션 잡고 있을 땐 슬라이더 변경해도 적용 안 됨을 시각적으로 알림 (선택사항)
+            }
+        }
+
+        function updateUI(openPrice) {
+            // 가격 색상
+            elLivePrice.innerText = currentPrice.toLocaleString(undefined, {minimumFractionDigits:2});
+            elLivePrice.style.color = currentPrice >= openPrice ? 'var(--up-color)' : 'var(--down-color)';
+
+            if (position) {
+                // PnL 계산: (현재가 - 진입가) * 수량
+                let rawPnl = 0;
+                if (position === 'long') {
+                    rawPnl = (currentPrice - entryPrice) * contractQty;
+                } else {
+                    rawPnl = (entryPrice - currentPrice) * contractQty;
+                }
+
+                // 수익률 계산: PnL / 내 원금(증거금) * 100
+                // 여기서 '내 원금'은 진입 당시 사용한 balance 전체라고 가정 (All-in 모드)
+                // 실제 거래소: ROE = (Unrealized PnL / Initial Margin) * 100
+                // 간편 계산: 가격변동률 * 레버리지
+                let priceDiffPct = (rawPnl / (entryPrice * contractQty)); // 총 포지션 가치 대비 변동폭 (레버리지 미반영)
+                // 하지만 contractQty 자체가 레버리지를 포함해 계산되었으므로,
+                // ROE = rawPnl / (Entry Balance) * 100
+                
+                // 진입 시 사용된 증거금 = (entryPrice * contractQty) / entryLeverage
+                let usedMargin = (entryPrice * contractQty) / entryLeverage;
+                let roe = (rawPnl / usedMargin) * 100;
+
+                elPnL.innerText = `${rawPnl >= 0 ? '+' : ''}$${rawPnl.toLocaleString(undefined, {minimumFractionDigits:2})}`;
+                elRoe.innerText = `${roe >= 0 ? '+' : ''}${roe.toFixed(2)}%`;
+                
+                let colorClass = rawPnl >= 0 ? 'positive' : 'negative';
+                elPnL.className = `value pnl ${colorClass}`;
+                elRoe.className = `roe pnl ${colorClass}`;
+            }
+        }
+
+        // 청산(Liquidation) 로직
+        function checkLiquidation() {
+            if (!position) return;
+
+            let rawPnl = 0;
+            if (position === 'long') rawPnl = (currentPrice - entryPrice) * contractQty;
+            else rawPnl = (entryPrice - currentPrice) * contractQty;
+
+            // 평가 담보금 = 초기 자본 + 손익
+            // 만약 손실이 초기 자본금을 다 까먹으면 청산
+            // 실제로는 유지증거금이 필요하지만 여기선 0원 되면 청산으로 단순화
+            if (balance + rawPnl <= 0) {
+                liquidatePosition();
+            }
+        }
+
+        function liquidatePosition() {
+            // 강제 청산
+            addMarker('Liquidation', 0);
+            alert(`💥 강제 청산 되었습니다! 💥\n\n모든 자산이 소멸되었습니다.\n(게임이 리셋됩니다)`);
+            
+            // 리셋
+            balance = 10000;
+            position = null;
+            entryPrice = 0;
+            contractQty = 0;
+            
+            updateBalanceDisplay();
+            resetControls();
+        }
+
+        // --- 6. 트레이딩 함수 ---
+        window.trade = function(type) {
+            if (position !== null) return;
+
+            // 진입 설정
+            position = type;
+            entryPrice = currentPrice;
+            entryLeverage = currentLeverage;
+            
+            // 수량 계산 (전재산 풀매수 기준)
+            // 총 포지션 규모 = 내돈 * 레버리지
+            let totalPositionValue = balance * entryLeverage;
+            contractQty = totalPositionValue / entryPrice;
+
+            // UI 업데이트
+            elLevSlider.disabled = true; // 진입 중 배율 변경 불가
+            btnLong.disabled = true;
+            btnShort.disabled = true;
+            btnClose.disabled = false;
+            
+            // 버튼 스타일 딤처리
+            btnLong.style.opacity = 0.3;
+            btnShort.style.opacity = 0.3;
+            btnClose.style.opacity = 1;
+
+            elPosType.innerText = type.toUpperCase();
+            elPosType.style.color = type === 'long' ? 'var(--up-color)' : 'var(--down-color)';
+            elPosInfo.style.display = 'inline-block';
+            elPosInfo.innerText = `${entryLeverage}x`;
+            elPosInfo.style.color = type === 'long' ? '#80cbc4' : '#ef9a9a'; // 연한 색
+
+            addMarker(type === 'long' ? 'Buy' : 'Sell');
+        };
+
+        window.closePosition = function() {
+            if (!position) return;
+
+            // 최종 손익 계산
+            let rawPnl = 0;
+            if (position === 'long') rawPnl = (currentPrice - entryPrice) * contractQty;
+            else rawPnl = (entryPrice - currentPrice) * contractQty;
+
+            balance += rawPnl;
+            addMarker('Close', rawPnl);
+
+            // 초기화
+            position = null;
+            contractQty = 0;
+            entryPrice = 0;
+            
+            elPnL.innerText = "$0.00";
+            elRoe.innerText = "0.00%";
+            elPnL.className = "value pnl";
+
+            updateBalanceDisplay();
+            resetControls();
+        };
+
+        function resetControls() {
+            elLevSlider.disabled = false;
+            btnLong.disabled = false;
+            btnShort.disabled = false;
+            btnClose.disabled = true;
+            
+            btnLong.style.opacity = 1;
+            btnShort.style.opacity = 1;
+            btnClose.style.opacity = 0.3;
+
+            elPosType.innerText = "대기 중";
+            elPosType.style.color = "#e0e0e0";
+            elPosInfo.style.display = 'none';
+        }
+
+        function updateBalanceDisplay() {
+            elBalance.innerText = `$${balance.toLocaleString(undefined, {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+        }
+
+        // 차트 마커
+        function addMarker(action, pnl) {
+            let color, shape, text, pos;
+            let time = series.dataByIndex(series.data().length - 1).time;
+
+            if (action === 'Buy') {
+                color = '#26a69a'; shape = 'arrowUp'; text = `LONG ${entryLeverage}x`; pos = 'belowBar';
+            } else if (action === 'Sell') {
+                color = '#ef5350'; shape = 'arrowDown'; text = `SHORT ${entryLeverage}x`; pos = 'aboveBar';
+            } else if (action === 'Liquidation') {
+                color = '#d32f2f'; shape = 'circle'; text = '💥 LIQUIDATED'; pos = 'aboveBar';
+            } else {
+                color = pnl >= 0 ? '#fdd835' : '#b0bec5';
+                shape = 'circle'; 
+                text = `Close ${pnl>=0?'+':''}$${Math.floor(pnl)}`; 
+                pos = position === 'long' ? 'aboveBar' : 'belowBar';
+            }
+
+            markers.push({ time, position: pos, color, shape, text });
+            markers.sort((a,b)=>a.time - b.time);
+            series.setMarkers(markers);
+        }
+    </script>
+</body>
+</html>
